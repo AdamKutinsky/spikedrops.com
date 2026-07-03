@@ -253,9 +253,7 @@ const REFRESH_MS = 5 * 60 * 1000;
 
 // Multiple proxies tried in order — first success wins
 const PROXY_FNS = [
-  url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-  url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
-  url => `https://thingproxy.freeboard.io/fetch/${url}`,
+  url => `https://nameless-moon-cd4e.adam-89b.workers.dev/?url=${encodeURIComponent(url)}`,
 ];
 
 // ═══════════════════════════════════════════════════════════
