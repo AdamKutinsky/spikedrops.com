@@ -4,6 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SpikeDrops</title>
+<meta name="theme-color" content="#0b0d14">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="SpikeDrops">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
 :root {
@@ -145,6 +150,26 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
 
 .pos { color: var(--up); }
 .neg { color: var(--down); }
+
+/* SIDEBAR — BERKSHIRE MOVES & TOP STORIES */
+.brk-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+.brk-row:last-of-type { border-bottom: none; }
+.brk-badge { flex-shrink: 0; font-size: 9px; font-weight: 800; padding: 1px 5px; border-radius: 3px; letter-spacing: 0.05em; white-space: nowrap; }
+.brk-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.brk-amt { font-weight: 700; flex-shrink: 0; font-size: 11.5px; }
+.story-row { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.story-row:last-child { border-bottom: none; }
+.story-rank { font-size: 15px; font-weight: 800; color: var(--muted); line-height: 1.3; flex-shrink: 0; }
+.story-title { font-size: 12.5px; line-height: 1.4; color: var(--text); text-decoration: none; display: block; }
+.story-title:hover { color: var(--market); text-decoration: underline; }
+.story-meta { font-size: 10.5px; color: var(--muted); margin-top: 2px; }
+
+/* FUNDAMENTALS STRIP */
+.sc-stats { display: flex; gap: 22px; background: var(--surface2); border: 1px solid var(--border); border-radius: 7px; padding: 8px 12px; margin: -4px 0 14px; }
+.sc-stat { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.sc-stat-label { font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); white-space: nowrap; }
+.sc-stat-val { font-size: 13px; font-weight: 700; white-space: nowrap; }
+.sc-stat-val .pos, .sc-stat-val .neg { font-size: 11px; font-weight: 600; }
 
 /* DIVIDER */
 .divider { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
@@ -308,15 +333,231 @@ async function fetchYF(ticker) {
 }
 
 async function fetchNews(ticker) {
-  try {
-    const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(ticker)}&quotesCount=0&newsCount=6&enableFuzzyQuery=false`;
-    const res = await fetch(CORS + encodeURIComponent(url));
-    if (!res.ok) return [];
-    const json = await res.json();
-    return (json.news || []).map(n => n.title || '');
-  } catch {
-    return [];
+  const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(ticker)}&quotesCount=0&newsCount=6&enableFuzzyQuery=false`;
+  for (const proxyFn of PROXY_FNS) {
+    try {
+      const res = await fetch(proxyFn(url));
+      if (!res.ok) continue;
+      const json = await res.json();
+      return (json.news || []).map(n => n.title || '');
+    } catch {}
   }
+  return [];
+}
+
+async function fetchFundamentals(ticker) {
+  // P/E ratio + analyst price targets. The proxy worker handles Yahoo's
+  // cookie/crumb authentication for this endpoint server-side.
+  const url = `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(ticker.toUpperCase())}?modules=summaryDetail%2CfinancialData`;
+  for (const proxyFn of PROXY_FNS) {
+    try {
+      const res = await fetch(proxyFn(url));
+      if (!res.ok) continue;
+      const json = await res.json();
+      const r = json?.quoteSummary?.result?.[0];
+      if (!r) continue;
+      const sd = r.summaryDetail || {};
+      const fd = r.financialData || {};
+      return {
+        trailingPE: sd.trailingPE?.raw ?? null,
+        forwardPE: sd.forwardPE?.raw ?? null,
+        targetMean: fd.targetMeanPrice?.raw ?? null,
+        targetHigh: fd.targetHighPrice?.raw ?? null,
+        targetLow: fd.targetLowPrice?.raw ?? null,
+        analysts: fd.numberOfAnalystOpinions?.raw ?? null,
+      };
+    } catch {}
+  }
+  return null;
+}
+
+function escHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+async function proxyFetch(url, asText) {
+  for (const proxyFn of PROXY_FNS) {
+    try {
+      const res = await fetch(proxyFn(url));
+      if (!res.ok) continue;
+      return asText ? await res.text() : await res.json();
+    } catch {}
+  }
+  return null;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  TOP MARKET STORIES
+// ═══════════════════════════════════════════════════════════
+async function fetchNewsRaw(query, count) {
+  const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=0&newsCount=${count}&enableFuzzyQuery=false`;
+  const json = await proxyFetch(url);
+  return json?.news || [];
+}
+
+async function fetchTopStories() {
+  // Pool headlines from the three major index feeds; a story carried by more
+  // feeds (or syndicated under near-identical titles) ranks as "most reported".
+  const feeds = await Promise.all(['^GSPC', '^DJI', '^IXIC'].map(q => fetchNewsRaw(q, 10)));
+  const seen = new Map();
+  feeds.forEach((feed, fi) => feed.forEach(n => {
+    if (!n.title) return;
+    const key = n.uuid || n.title;
+    if (!seen.has(key)) seen.set(key, { n, feeds: new Set() });
+    seen.get(key).feeds.add(fi);
+  }));
+
+  const norm = t => new Set(t.toLowerCase().replace(/[^a-z0-9 ]/g, '').split(/\s+/).filter(w => w.length > 3));
+  const overlap = (a, b) => {
+    let inter = 0;
+    a.forEach(w => { if (b.has(w)) inter++; });
+    return inter / (Math.min(a.size, b.size) || 1);
+  };
+
+  const clusters = [];
+  for (const { n, feeds: f } of seen.values()) {
+    const words = norm(n.title);
+    const cl = clusters.find(c => overlap(c.words, words) >= 0.6);
+    if (cl) {
+      cl.count += f.size;
+      if ((n.providerPublishTime || 0) > (cl.n.providerPublishTime || 0)) cl.n = n;
+    } else {
+      clusters.push({ n, words, count: f.size });
+    }
+  }
+  clusters.sort((a, b) => b.count - a.count || (b.n.providerPublishTime || 0) - (a.n.providerPublishTime || 0));
+  return clusters.slice(0, 3).map(c => c.n);
+}
+
+function timeAgo(ts) {
+  if (!ts) return '';
+  const m = Math.max(1, Math.round((Date.now() / 1000 - ts) / 60));
+  if (m < 60) return m + 'm ago';
+  const h = Math.round(m / 60);
+  if (h < 24) return h + 'h ago';
+  return Math.round(h / 24) + 'd ago';
+}
+
+async function refreshTopStories() {
+  const el = document.getElementById('top-stories');
+  if (!el) return;
+  const stories = await fetchTopStories();
+  if (!stories.length) {
+    el.innerHTML = '<p class="help">No market stories available right now.</p>';
+    return;
+  }
+  el.innerHTML = stories.map((n, i) => {
+    const link = (n.link || '').startsWith('http') ? n.link : '#';
+    return `
+    <div class="story-row">
+      <span class="story-rank">${i + 1}</span>
+      <div style="min-width:0">
+        <a class="story-title" href="${escHtml(link)}" target="_blank" rel="noopener">${escHtml(n.title)}</a>
+        <div class="story-meta">${escHtml(n.publisher || '')} · ${timeAgo(n.providerPublishTime)}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ═══════════════════════════════════════════════════════════
+//  BERKSHIRE 13F — LATEST BUYS & SELLS
+// ═══════════════════════════════════════════════════════════
+const BRK_CIK = '1067983';
+
+function parse13F(xmlText) {
+  const doc = new DOMParser().parseFromString(xmlText, 'text/xml');
+  const pos = {}; // cusip -> { name, shares, value }
+  for (const el of doc.getElementsByTagName('*')) {
+    if (el.localName !== 'infoTable') continue;
+    let name = '', cusip = '', shares = 0, value = 0;
+    for (const c of el.getElementsByTagName('*')) {
+      if (c.localName === 'nameOfIssuer') name = c.textContent.trim();
+      else if (c.localName === 'cusip') cusip = c.textContent.trim();
+      else if (c.localName === 'sshPrnamt') shares += parseFloat(c.textContent) || 0;
+      else if (c.localName === 'value') value += parseFloat(c.textContent) || 0;
+    }
+    if (!cusip) continue;
+    if (!pos[cusip]) pos[cusip] = { name, shares: 0, value: 0 };
+    pos[cusip].shares += shares;
+    pos[cusip].value += value;
+  }
+  return pos;
+}
+
+function quarterLabel(dateStr) {
+  const [y, m] = (dateStr || '').split('-').map(Number);
+  return y ? 'Q' + Math.ceil(m / 3) + ' ' + y : '';
+}
+
+async function fetchBrkMoves() {
+  // 1. Find Berkshire's two most recent 13F-HR filings (data.sec.gov allows CORS)
+  const subUrl = `https://data.sec.gov/submissions/CIK${BRK_CIK.padStart(10, '0')}.json`;
+  let sub = null;
+  try {
+    const r = await fetch(subUrl);
+    if (r.ok) sub = await r.json();
+  } catch {}
+  if (!sub) sub = await proxyFetch(subUrl);
+  const rec = sub?.filings?.recent;
+  if (!rec) return null;
+
+  const filings = [];
+  for (let i = 0; i < rec.form.length && filings.length < 2; i++) {
+    if (rec.form[i] === '13F-HR') {
+      filings.push({ acc: rec.accessionNumber[i].replace(/-/g, ''), rpt: rec.reportDate[i] });
+    }
+  }
+  if (filings.length < 2) return null;
+
+  // 2. For each filing, locate and parse the holdings table XML
+  const tables = await Promise.all(filings.map(async f => {
+    const idx = await proxyFetch(`https://www.sec.gov/Archives/edgar/data/${BRK_CIK}/${f.acc}/index.json`);
+    const files = idx?.directory?.item || [];
+    const info = files.find(it => it.name.endsWith('.xml') && it.name !== 'primary_doc.xml');
+    if (!info) return null;
+    const xml = await proxyFetch(`https://www.sec.gov/Archives/edgar/data/${BRK_CIK}/${f.acc}/${info.name}`, true);
+    return xml ? parse13F(xml) : null;
+  }));
+  if (!tables[0] || !tables[1]) return null;
+
+  // 3. Diff positions by CUSIP (issuer names vary between quarters; CUSIPs don't)
+  const [latest, prior] = tables;
+  const changes = [];
+  for (const cusip of new Set([...Object.keys(latest), ...Object.keys(prior)])) {
+    const n = latest[cusip] || { shares: 0, value: 0 };
+    const o = prior[cusip] || { shares: 0, value: 0 };
+    const d = n.shares - o.shares;
+    if (!d) continue;
+    const ref = n.shares ? n : o;
+    const px = ref.shares ? ref.value / ref.shares : 0;
+    changes.push({
+      name: (latest[cusip] || prior[cusip]).name,
+      kind: !o.shares ? 'NEW BUY' : !n.shares ? 'SOLD ALL' : d > 0 ? 'ADDED' : 'TRIMMED',
+      dollars: Math.abs(d) * px,
+      buy: d > 0,
+    });
+  }
+  changes.sort((a, b) => b.dollars - a.dollars);
+  return { changes: changes.slice(0, 6), newQ: filings[0].rpt, oldQ: filings[1].rpt };
+}
+
+async function refreshBrkMoves() {
+  const el = document.getElementById('brk-moves');
+  if (!el) return;
+  const data = await fetchBrkMoves();
+  if (!data || !data.changes.length) {
+    el.innerHTML = '<p class="help">Could not load Berkshire 13F data from SEC EDGAR.</p>';
+    return;
+  }
+  const fmt$ = v => v >= 1e9 ? '$' + (v / 1e9).toFixed(1) + 'B' : v >= 1e6 ? '$' + (v / 1e6).toFixed(0) + 'M' : '$' + (v / 1e3).toFixed(0) + 'K';
+  const titleCase = s => s.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+  el.innerHTML = data.changes.map(c => `
+    <div class="brk-row">
+      <span class="brk-badge ${c.buy ? 'badge-buy' : 'badge-sell'}">${c.kind}</span>
+      <span class="brk-name" title="${escHtml(titleCase(c.name))}">${escHtml(titleCase(c.name))}</span>
+      <span class="brk-amt ${c.buy ? 'pos' : 'neg'}">${c.buy ? '+' : '−'}${fmt$(c.dollars)}</span>
+    </div>`).join('') +
+    `<p class="help" style="margin-top:8px">${quarterLabel(data.oldQ)} → ${quarterLabel(data.newQ)}, from Berkshire's latest quarterly 13F filing (SEC allows up to a 45-day reporting lag). Dollar values estimated at filing-period prices.</p>`;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -464,8 +705,11 @@ function buildNarrative(ticker, attr, event) {
 // ═══════════════════════════════════════════════════════════
 //  TICKER — STATE & CONSTANTS
 // ═══════════════════════════════════════════════════════════
-let activeTicker = 'movers';
-let tickerCache = { movers: null, industries: null, berkshire: null, insiders: null };
+let activeTicker = 'mag7';
+let tickerCache = { mag7: null, movers: null, industries: null, berkshire: null, insiders: null };
+
+// Magnificent 7
+const MAG7 = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA'];
 
 // Fallback universe for movers when screener is unavailable
 const MOVER_UNIVERSE = [
@@ -680,6 +924,14 @@ async function runStressTest() {
 async function refreshTicker() {
   // Fetch each feed independently so one failure doesn't block the others
 
+  // 0. Magnificent 7
+  (async () => {
+    const quotes = await fetchQuotes(MAG7);
+    quotes.sort((a, b) => b.change - a.change);
+    tickerCache.mag7 = quotes;
+    if (activeTicker === 'mag7') renderTickerContent();
+  })();
+
   // 1. Movers — try screener first, fall back to fixed universe
   (async () => {
     let gainers = await fetchScreener('day_gainers');
@@ -756,7 +1008,12 @@ function renderTickerContent() {
   let inner = '';
   let count = 0;
 
-  if (activeTicker === 'movers') {
+  if (activeTicker === 'mag7') {
+    if (!data.length) { wrap.innerHTML = '<div class="ticker-loading">No Mag 7 data</div>'; return; }
+    inner = `<div class="ticker-section neutral">Magnificent 7</div>` + data.map(q => itemHtml(q)).join('');
+    count = data.length;
+
+  } else if (activeTicker === 'movers') {
     const { gainers, losers } = data;
     if (!gainers.length && !losers.length) { wrap.innerHTML = '<div class="ticker-loading">No mover data</div>'; return; }
     const gHtml = gainers.length ? `<div class="ticker-section up">▲ Gainers</div>${gainers.map(q => itemHtml(q)).join('')}` : '';
@@ -824,9 +1081,10 @@ async function refreshAll() {
 
     await Promise.allSettled(trackedStocks.map(async stock => {
       try {
-        const [data, headlines] = await Promise.all([
+        const [data, headlines, fund] = await Promise.all([
           fetchYF(stock.ticker),
-          fetchNews(stock.ticker)
+          fetchNews(stock.ticker),
+          fetchFundamentals(stock.ticker)
         ]);
 
         const sec = sectorCache[stock.sector];
@@ -836,7 +1094,7 @@ async function refreshAll() {
           ? (data.currentPrice / data.previousClose - 1) * 100 : null;
         const flagged = change !== null && Math.abs(change) >= stock.threshold;
 
-        results[stock.ticker] = { data, attr, event, change, flagged, error: null };
+        results[stock.ticker] = { data, attr, event, change, flagged, fund, error: null };
       } catch (e) {
         results[stock.ticker] = { error: e.message, flagged: false };
       }
@@ -877,7 +1135,10 @@ function renderApp() {
     </header>
     <div class="ticker-bar" id="tickerBar">
       <div class="ticker-tabs">
-        <button class="ticker-tab active" id="tab-movers" onclick="switchTicker('movers')">
+        <button class="ticker-tab active" id="tab-mag7" onclick="switchTicker('mag7')">
+          <span class="tab-dot" style="background:#22d3ee"></span>Mag 7
+        </button>
+        <button class="ticker-tab" id="tab-movers" onclick="switchTicker('movers')">
           <span class="tab-dot" style="background:var(--market)"></span>Movers
         </button>
         <button class="ticker-tab" id="tab-industries" onclick="switchTicker('industries')">
@@ -953,6 +1214,20 @@ function renderApp() {
             </div>
           </div>
         </div>
+
+        <div class="card">
+          <div class="card-heading">Berkshire's Latest Moves</div>
+          <div id="brk-moves">
+            <div style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px"><div class="spinner"></div> Loading 13F filings…</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-heading">Top Market Stories</div>
+          <div id="top-stories">
+            <div style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px"><div class="spinner"></div> Loading…</div>
+          </div>
+        </div>
       </aside>
 
       <div class="content">
@@ -1020,7 +1295,7 @@ function renderCard(stock) {
     </div>`;
   }
 
-  const { data, attr, event, change, flagged } = r;
+  const { data, attr, event, change, flagged, fund } = r;
   const changeSign = change >= 0 ? '+' : '';
   const changeClass = change >= 0 ? 'pos' : 'neg';
   const eventHtml = event
@@ -1116,6 +1391,39 @@ function renderCard(stock) {
     attrHtml = `<div style="font-size:11px;color:var(--muted);margin-top:10px">No sector data — attribution unavailable</div>`;
   }
 
+  // Fundamentals strip: P/E ratio + average analyst price target
+  let fundHtml = '';
+  if (fund && (fund.trailingPE != null || fund.targetMean != null)) {
+    const peText = fund.trailingPE != null ? fund.trailingPE.toFixed(1) : '—';
+    let targetText = '—';
+    if (fund.targetMean != null) {
+      targetText = '$' + fund.targetMean.toFixed(2);
+      if (data.currentPrice) {
+        const upside = (fund.targetMean / data.currentPrice - 1) * 100;
+        const upCls = upside >= 0 ? 'pos' : 'neg';
+        targetText += ` <span class="${upCls}">${upside >= 0 ? '+' : ''}${upside.toFixed(1)}%</span>`;
+      }
+    }
+    const rangeTitle = (fund.targetLow != null && fund.targetHigh != null)
+      ? `Analyst range: $${fund.targetLow.toFixed(2)} – $${fund.targetHigh.toFixed(2)}`
+      : '';
+    fundHtml = `
+      <div class="sc-stats">
+        <div class="sc-stat" title="Trailing 12-month price-to-earnings ratio">
+          <span class="sc-stat-label">P/E (TTM)</span>
+          <span class="sc-stat-val">${peText}</span>
+        </div>
+        <div class="sc-stat" title="${rangeTitle}">
+          <span class="sc-stat-label">Avg Price Target</span>
+          <span class="sc-stat-val">${targetText}</span>
+        </div>
+        <div class="sc-stat" title="Number of analysts contributing to the average target">
+          <span class="sc-stat-label">Analysts</span>
+          <span class="sc-stat-val">${fund.analysts ?? '—'}</span>
+        </div>
+      </div>`;
+  }
+
   return `
     <div class="stock-card ${flagged ? 'is-flagged' : ''}">
       <div class="sc-header">
@@ -1134,6 +1442,7 @@ function renderCard(stock) {
         Threshold: ±${stock.threshold}% &nbsp;·&nbsp; Sector: ${stock.sector}
         ${eventHtml}
       </div>
+      ${fundHtml}
       ${attrHtml}
     </div>
   `;
@@ -1314,9 +1623,12 @@ function renderBanner(cls, html) {
 renderApp();
 renderContent();
 refreshTicker();
+refreshBrkMoves();
+refreshTopStories();
 if (trackedStocks.length > 0) refreshAll();
 setInterval(refreshAll, REFRESH_MS);
 setInterval(refreshTicker, 30 * 60 * 1000);
+setInterval(refreshTopStories, 30 * 60 * 1000);
 </script>
 </body>
 </html>
