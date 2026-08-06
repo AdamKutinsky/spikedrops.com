@@ -152,6 +152,38 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
 .pos { color: var(--up); }
 .neg { color: var(--down); }
 
+/* PRICE MOVEMENT AUTOPSY */
+.autopsy-toggle { background: none; border: 1px dashed var(--border); color: var(--muted); width: 100%; text-align: left; padding: 6px 10px; border-radius: 7px; cursor: pointer; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; margin-bottom: 12px; }
+.autopsy-toggle:hover { color: var(--text); border-color: var(--muted); }
+.autopsy { background: var(--surface2); border: 1px solid var(--border); border-radius: 9px; padding: 12px 14px; margin: -4px 0 14px; }
+.ap-head { font-size: 12.5px; font-weight: 700; margin-bottom: 8px; }
+.ap-row { display: grid; grid-template-columns: 10px 1fr 62px 36px; gap: 8px; align-items: center; padding: 3px 0; font-size: 11.5px; }
+.ap-dot { width: 8px; height: 8px; border-radius: 50%; }
+.ap-src { color: var(--muted); }
+.ap-val { font-weight: 700; text-align: right; }
+.ap-share { font-size: 10px; color: var(--muted); text-align: right; }
+.ap-conf { font-size: 11px; color: var(--muted); margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border); }
+.ap-info { cursor: help; opacity: 0.7; }
+.ap-sec { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin: 12px 0 5px; }
+.ap-list { margin: 0 0 0 16px; font-size: 11.5px; line-height: 1.5; color: var(--text); }
+.ap-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.ap-table th { text-align: left; color: var(--muted); font-weight: 600; padding: 2px 6px 2px 0; border-bottom: 1px solid var(--border); }
+.ap-table td { padding: 3px 6px 3px 0; border-bottom: 1px solid var(--border); }
+.ap-table tr:last-child td { border-bottom: none; }
+.ap-own { display: grid; grid-template-columns: 1fr 90px 82px; gap: 8px; align-items: center; padding: 3px 0; font-size: 11px; color: var(--muted); }
+.ap-own b { color: var(--text); text-align: right; font-size: 10.5px; }
+.ap-bar-bg { background: var(--surface); border: 1px solid var(--border); height: 7px; border-radius: 3px; overflow: hidden; }
+.ap-bar-fill { height: 100%; background: var(--market); border-radius: 3px; }
+.ap-mr { font-size: 11.5px; line-height: 1.55; color: var(--text); display: flex; gap: 8px; align-items: flex-start; }
+
+/* PORTFOLIO SUMMARY */
+.pf-card { grid-column: 1 / -1; }
+.pf-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px 18px; margin-bottom: 12px; }
+.pf-item { display: flex; flex-direction: column; gap: 2px; }
+.pf-k { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.pf-v { font-size: 14px; font-weight: 700; }
+.pf-risk-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-bottom: 4px; }
+
 /* AUTH GATE */
 .auth-overlay { position: fixed; inset: 0; z-index: 1000; background: var(--bg); display: flex; align-items: center; justify-content: center; padding: 20px; }
 .auth-card { width: 100%; max-width: 380px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 28px; }
@@ -400,6 +432,42 @@ function signOut() {
 }
 
 // ═══════════════════════════════════════════════════════════
+//  DASHBOARD TRANSFER
+//  Encode the tracked-stock list into a shareable URL so the
+//  dashboard can be carried into the Dock app / other browsers
+//  (each browser keeps its own separate localStorage copy).
+// ═══════════════════════════════════════════════════════════
+function copyDashboardLink() {
+  if (!trackedStocks.length) return alert('No stocks tracked yet — add some first.');
+  const url = location.origin + location.pathname + '#s=' + encodeURIComponent(btoa(JSON.stringify(trackedStocks)));
+  const done = () => alert('Dashboard link copied!\n\nOpen it in the Dock app (or any browser) and your tracked stocks will import automatically.');
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(url).then(done).catch(() => prompt('Copy this link:', url));
+  } else {
+    prompt('Copy this link:', url);
+  }
+}
+
+function importFromHash() {
+  if (!location.hash.startsWith('#s=')) return;
+  try {
+    const list = JSON.parse(atob(decodeURIComponent(location.hash.slice(3))));
+    if (!Array.isArray(list)) throw new Error('bad format');
+    let added = 0;
+    for (const s of list) {
+      const ticker = String(s.ticker || '').toUpperCase().slice(0, 10);
+      const threshold = parseFloat(s.threshold);
+      if (!ticker || !SECTOR_ETFS[s.sector] || isNaN(threshold) || threshold <= 0 || threshold > 50) continue;
+      if (trackedStocks.find(t => t.ticker === ticker)) continue;
+      trackedStocks.push({ ticker, sector: s.sector, threshold });
+      added++;
+    }
+    if (added) localStorage.setItem('smt_stocks', JSON.stringify(trackedStocks));
+  } catch {}
+  history.replaceState(null, '', location.pathname + location.search);
+}
+
+// ═══════════════════════════════════════════════════════════
 //  DATA FETCHING
 // ═══════════════════════════════════════════════════════════
 function parseYFJson(json, ticker) {
@@ -456,7 +524,7 @@ async function fetchNews(ticker) {
 async function fetchFundamentals(ticker) {
   // P/E ratio + analyst price targets. The proxy worker handles Yahoo's
   // cookie/crumb authentication for this endpoint server-side.
-  const url = `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(ticker.toUpperCase())}?modules=summaryDetail%2CfinancialData%2CdefaultKeyStatistics`;
+  const url = `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(ticker.toUpperCase())}?modules=summaryDetail%2CfinancialData%2CdefaultKeyStatistics%2CearningsHistory`;
   for (const proxyFn of PROXY_FNS) {
     try {
       const res = await fetch(proxyFn(url));
@@ -496,6 +564,28 @@ async function fetchFundamentals(ticker) {
           priceToBook: g(ks.priceToBook),
           pegRatio: g(ks.pegRatio),
         },
+        // Intrinsic-value inputs
+        trailingEps: g(ks.trailingEps),
+        forwardEps: g(ks.forwardEps),
+        earningsGrowth: g(fd.earningsGrowth),
+        // Ownership & positioning (latest reported figures)
+        own: {
+          instPct: g(ks.heldPercentInstitutions),
+          insiderPct: g(ks.heldPercentInsiders),
+          shortPctFloat: g(ks.shortPercentOfFloat),
+          shortRatio: g(ks.shortRatio),
+          sharesShort: g(ks.sharesShort),
+          sharesShortPrior: g(ks.sharesShortPriorMonth),
+          shortDate: g(ks.dateShortInterest),
+          beta: g(ks.beta),
+        },
+        // Expectations vs reality: last 4 quarters of consensus vs actual EPS
+        earnHistory: (r.earningsHistory?.history || []).map(q => ({
+          quarter: q.quarter?.fmt || '',
+          est: g(q.epsEstimate),
+          actual: g(q.epsActual),
+          surprise: g(q.surprisePercent),
+        })).filter(q => q.est != null && q.actual != null).slice(-4),
       };
     } catch {}
   }
@@ -573,6 +663,157 @@ function healthVerdict(s) { return s >= 70 ? 'Excellent' : s >= 40 ? 'Moderate' 
 function toggleHealth(ticker) {
   healthOpen.has(ticker) ? healthOpen.delete(ticker) : healthOpen.add(ticker);
   renderContent();
+}
+
+// ═══════════════════════════════════════════════════════════
+//  INTRINSIC VALUE ESTIMATE
+//  Transparent formula — average of two anchors:
+//  (1) analyst consensus mean price target
+//  (2) earnings power: forward EPS × growth-adjusted fair multiple,
+//      fairPE = 12 + 0.7 × growth% (clamped to 10–28×)
+//  Labeled in the UI as a simplified estimate, not a valuation opinion.
+// ═══════════════════════════════════════════════════════════
+function computeIntrinsic(fund, price) {
+  if (!fund) return null;
+  const anchors = [];
+  if (fund.targetMean > 0) {
+    anchors.push({ label: `Analyst consensus target (${fund.analysts || '?'} analysts)`, value: fund.targetMean });
+  }
+  if (fund.forwardEps > 0) {
+    const gPct = Math.max(0, Math.min(0.25, fund.earningsGrowth ?? 0)) * 100;
+    const fairPE = Math.min(28, Math.max(10, 12 + 0.7 * gPct));
+    anchors.push({ label: `Earnings power: fwd EPS $${fund.forwardEps.toFixed(2)} × ${fairPE.toFixed(0)}× growth-adjusted multiple`, value: fund.forwardEps * fairPE });
+  }
+  if (!anchors.length || !price) return null;
+  const value = anchors.reduce((a, x) => a + x.value, 0) / anchors.length;
+  const premPct = (price / value - 1) * 100;  // positive = trading at a premium
+  return { value, premPct, anchors };
+}
+
+// ═══════════════════════════════════════════════════════════
+//  MEAN REVERSION — 2-year historical context for today's move
+// ═══════════════════════════════════════════════════════════
+let mrCache = {};   // ticker -> { closes: [...] } | 'loading' | 'failed'
+let autopsyOpen = new Set();
+
+async function fetchMeanReversionHistory(ticker) {
+  const yfUrl = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?range=2y&interval=1d`;
+  const json = await proxyFetch(yfUrl);
+  const r = json?.chart?.result?.[0];
+  const ts = r?.timestamp || [];
+  const closes = (r?.indicators?.adjclose?.[0]?.adjclose || r?.indicators?.quote?.[0]?.close || [])
+    .filter((c, i) => c != null && c > 0 && ts[i] != null);
+  return closes.length > 100 ? { closes } : null;
+}
+
+function meanReversionStats(closes, todayChangePct) {
+  const FWD = 20;
+  const rets = [];
+  for (let i = 1; i < closes.length; i++) rets.push((closes[i] / closes[i - 1] - 1) * 100);
+  const absToday = Math.abs(todayChangePct);
+  const total = rets.length;
+  // Days at least as extreme as today, where a 20-day forward window exists
+  const fwd = [];
+  let matchCount = 0;
+  for (let i = 0; i < rets.length; i++) {
+    if (Math.abs(rets[i]) >= absToday) {
+      matchCount++;
+      const p0 = closes[i + 1], p1 = closes[i + 1 + FWD];
+      if (p0 && p1) fwd.push((p1 / p0 - 1) * 100);
+    }
+  }
+  const rarityPct = matchCount / total * 100;
+  const avgFwd = fwd.length ? fwd.reduce((a, b) => a + b, 0) / fwd.length : null;
+  // Confidence grows with sample size; capped and labeled heuristic
+  const confidence = fwd.length ? Math.min(90, 25 + fwd.length * 3) : null;
+  return { total, matchCount, rarityPct, avgFwd, n: fwd.length, confidence, fwdDays: FWD };
+}
+
+function toggleAutopsy(ticker) {
+  if (autopsyOpen.has(ticker)) {
+    autopsyOpen.delete(ticker);
+    renderContent();
+    return;
+  }
+  autopsyOpen.add(ticker);
+  renderContent();
+  if (!mrCache[ticker]) {
+    mrCache[ticker] = 'loading';
+    fetchMeanReversionHistory(ticker)
+      .then(h => { mrCache[ticker] = h || 'failed'; renderContent(); })
+      .catch(() => { mrCache[ticker] = 'failed'; renderContent(); });
+  }
+}
+
+function buildAutopsyHtml(stock, r) {
+  const { data, attr, change, fund, headlines } = r;
+  const t = stock.ticker;
+  const sign = v => (v >= 0 ? '+' : '') + v.toFixed(2);
+  let html = `<div class="autopsy">`;
+
+  // ── Decomposition in percentage points
+  if (attr) {
+    html += `
+      <div class="ap-head">${escHtml(t)} ${sign(attr.stockReturn)}% today — where it came from</div>
+      <div class="ap-row"><span class="ap-dot" style="background:var(--market)"></span><span class="ap-src">S&amp;P 500 market move (β ${attr.βM})</span><span class="ap-val ${attr.mComp >= 0 ? 'pos' : 'neg'}">${sign(attr.mComp)}pp</span><span class="ap-share">${attr.mPct.toFixed(0)}%</span></div>
+      <div class="ap-row"><span class="ap-dot" style="background:var(--industry)"></span><span class="ap-src">${escHtml(stock.sector)} sector, beyond market (β ${attr.βI})</span><span class="ap-val ${attr.iComp >= 0 ? 'pos' : 'neg'}">${sign(attr.iComp)}pp</span><span class="ap-share">${attr.iPct.toFixed(0)}%</span></div>
+      <div class="ap-row"><span class="ap-dot" style="background:var(--company)"></span><span class="ap-src">Company-specific residual</span><span class="ap-val ${attr.cComp >= 0 ? 'pos' : 'neg'}">${sign(attr.cComp)}pp</span><span class="ap-share">${attr.cPct.toFixed(0)}%</span></div>
+      <div class="ap-conf">Model fit R² <b>${attr.r2}%</b> over ${attr.windowDays} trading days &nbsp;·&nbsp; Decomposition confidence <b style="color:${attr.confidence >= 65 ? 'var(--up)' : attr.confidence >= 35 ? 'var(--market)' : 'var(--down)'}">${attr.confidence}%</b>
+        <span class="ap-info" title="Confidence combines how well the market+sector model historically explains this stock (R²) with how large today's move is relative to its normal daily noise. Small moves are hard to attribute reliably.">ⓘ</span></div>`;
+  }
+
+  // ── Evidence: today's actual headlines
+  if (headlines && headlines.length) {
+    html += `<div class="ap-sec">Possible company-specific drivers — today's headlines</div><ul class="ap-list">` +
+      headlines.slice(0, 4).map(h => `<li>${escHtml(h)}</li>`).join('') + `</ul>`;
+  }
+
+  // ── Expectations vs reality (real consensus data)
+  if (fund?.earnHistory?.length) {
+    html += `<div class="ap-sec">Earnings: expectations vs reality (consensus EPS)</div>
+      <table class="ap-table"><tr><th>Quarter</th><th>Expected</th><th>Actual</th><th>Surprise</th></tr>` +
+      fund.earnHistory.map(q => {
+        const beat = q.surprise >= 0;
+        return `<tr><td>${escHtml(q.quarter)}</td><td>$${q.est.toFixed(2)}</td><td>$${q.actual.toFixed(2)}</td><td class="${beat ? 'pos' : 'neg'}">${beat ? '+' : ''}${(q.surprise * 100).toFixed(1)}%</td></tr>`;
+      }).join('') + `</table>`;
+  }
+
+  // ── Ownership & positioning (latest reported — real, dated figures)
+  if (fund?.own) {
+    const o = fund.own;
+    const bar = (v, max) => `<div class="ap-bar-bg"><div class="ap-bar-fill" style="width:${Math.min(100, v / max * 100).toFixed(0)}%"></div></div>`;
+    const shortTrend = (o.sharesShort != null && o.sharesShortPrior != null)
+      ? (o.sharesShort > o.sharesShortPrior ? ' ▲ rising' : o.sharesShort < o.sharesShortPrior ? ' ▼ falling' : ' flat') : '';
+    const asOf = o.shortDate ? new Date(o.shortDate * 1000).toLocaleDateString([], { month: 'short', day: 'numeric' }) : '';
+    html += `<div class="ap-sec">Ownership &amp; positioning (latest reported)</div>`;
+    if (o.instPct != null) html += `<div class="ap-own"><span>Institutional ownership</span>${bar(o.instPct * 100, 100)}<b>${(o.instPct * 100).toFixed(0)}%</b></div>`;
+    if (o.insiderPct != null) html += `<div class="ap-own"><span>Insider ownership</span>${bar(o.insiderPct * 100, 100)}<b>${(o.insiderPct * 100).toFixed(1)}%</b></div>`;
+    if (o.shortPctFloat != null) html += `<div class="ap-own"><span>Short interest (% of float${asOf ? ', ' + asOf : ''})</span>${bar(o.shortPctFloat * 100, 20)}<b>${(o.shortPctFloat * 100).toFixed(1)}%${shortTrend}</b></div>`;
+    if (o.shortRatio != null) html += `<div class="ap-own"><span>Days-to-cover (short ratio)</span>${bar(o.shortRatio, 10)}<b>${o.shortRatio.toFixed(1)}d</b></div>`;
+    if (o.beta != null) html += `<div class="ap-own"><span>Beta (5y monthly)</span>${bar(o.beta, 3)}<b>${o.beta.toFixed(2)}</b></div>`;
+  }
+
+  // ── Mean reversion: 2-year historical context
+  html += `<div class="ap-sec">Historical context — how unusual is today?</div>`;
+  const mr = mrCache[t];
+  if (mr === 'loading' || !mr) {
+    html += `<div class="ap-mr"><div class="spinner"></div> Loading 2 years of history…</div>`;
+  } else if (mr === 'failed') {
+    html += `<div class="ap-mr">Could not load 2-year history.</div>`;
+  } else if (change != null) {
+    const s = meanReversionStats(mr.closes, change);
+    if (s.matchCount === 0) {
+      html += `<div class="ap-mr">Today's ${Math.abs(change).toFixed(1)}% move is the largest daily move in the past 2 years (${s.total} trading days).</div>`;
+    } else {
+      html += `<div class="ap-mr">Moves of ≥${Math.abs(change).toFixed(1)}% occurred on <b>${s.rarityPct.toFixed(1)}%</b> of the last ${s.total} trading days (${s.matchCount} days).` +
+        (s.avgFwd != null
+          ? ` After such days, the average ${s.fwdDays}-day forward return was <b class="${s.avgFwd >= 0 ? 'pos' : 'neg'}">${s.avgFwd >= 0 ? '+' : ''}${s.avgFwd.toFixed(1)}%</b> (n=${s.n}, heuristic confidence ${s.confidence}%).`
+          : '') + `</div>`;
+    }
+  }
+
+  html += `<p class="help" style="margin-top:8px">Decomposition from a 2-factor regression (S&amp;P 500 + sector ETF). Ownership/short data as last reported to the SEC/FINRA via Yahoo Finance. Historical patterns do not predict future results. Not investment advice.</p></div>`;
+  return html;
 }
 
 function escHtml(s) {
@@ -845,6 +1086,20 @@ function attribute(stockData, mktData, secData) {
   const opportunityScore = Math.min(100, magnitude *
     (mPct/100 * OPP_WEIGHTS.market + iPct/100 * OPP_WEIGHTS.industry + cPct/100 * OPP_WEIGHTS.company) * 10);
 
+  // Model fit: how much of this stock's daily variance the two-factor
+  // model historically explains (R²), plus residual noise level.
+  const pred = slice.map((d, k) => βM * mR[k] + βI * secExcess[k]);
+  const meanS = sR.reduce((a, b) => a + b, 0) / sR.length;
+  const ssTot = sR.reduce((a, r) => a + (r - meanS) ** 2, 0);
+  const ssRes = sR.reduce((a, r, k) => a + (r - pred[k]) ** 2, 0);
+  const r2 = ssTot > 0 ? Math.max(0, 1 - ssRes / ssTot) : 0;
+  const sigmaStock = Math.sqrt(ssTot / Math.max(1, sR.length - 1));
+
+  // Decomposition confidence: high model fit AND a move large enough to
+  // stand out from daily noise. Heuristic, shown to the user as such.
+  const signalStrength = 1 - Math.exp(-Math.abs(latest.s) / (sigmaStock || 0.0001));
+  const confidence = Math.max(5, Math.min(97, 100 * Math.sqrt(r2) * signalStrength));
+
   return {
     stockReturn: latest.s * 100,
     mComp: mComp * 100,
@@ -852,6 +1107,9 @@ function attribute(stockData, mktData, secData) {
     cComp: cComp * 100,
     mPct, iPct, cPct,
     βM: +βM.toFixed(2), βI: +βI.toFixed(2),
+    r2: +(r2 * 100).toFixed(0),
+    confidence: +confidence.toFixed(0),
+    windowDays: window,
     recoveryProb: +recoveryProb.toFixed(1),
     opportunityScore: +opportunityScore.toFixed(1)
   };
@@ -1298,7 +1556,7 @@ async function refreshAll() {
           ? (data.currentPrice / data.previousClose - 1) * 100 : null;
         const flagged = change !== null && Math.abs(change) >= stock.threshold;
 
-        results[stock.ticker] = { data, attr, event, change, flagged, fund, error: null };
+        results[stock.ticker] = { data, attr, event, change, flagged, fund, headlines, error: null };
       } catch (e) {
         results[stock.ticker] = { error: e.message, flagged: false };
       }
@@ -1391,6 +1649,7 @@ function renderApp() {
             <p class="help">Flag when single-day move exceeds this percentage</p>
           </div>
           <button class="btn btn-primary btn-full" onclick="addStock()">Add Stock</button>
+          <button class="btn btn-ghost btn-sm btn-full" style="margin-top:8px" onclick="copyDashboardLink()" title="Copies a link that imports your tracked stocks into the Dock app or another browser">🔗 Copy Dashboard Transfer Link</button>
         </div>
 
         <div class="card">
@@ -1471,13 +1730,84 @@ function renderContent() {
   Object.values(chartInstances).forEach(c => c.destroy());
   chartInstances = {};
 
-  grid.innerHTML = trackedStocks.map(s => renderCard(s)).join('');
+  grid.innerHTML = renderPortfolioSummary() + trackedStocks.map(s => renderCard(s)).join('');
 
   // Mount charts for flagged stocks
   trackedStocks.forEach(s => {
     const r = results[s.ticker];
     if (r?.attr && r.flagged) mountChart(s.ticker, r.attr);
   });
+}
+
+// ═══════════════════════════════════════════════════════════
+//  PORTFOLIO SUMMARY — equal-weight rollup across tracked stocks
+// ═══════════════════════════════════════════════════════════
+function renderPortfolioSummary() {
+  const rows = trackedStocks
+    .map(s => ({ s, r: results[s.ticker] }))
+    .filter(x => x.r && !x.r.error && x.r.change != null);
+  if (rows.length < 2) return '';
+
+  const avgMove = rows.reduce((a, x) => a + x.r.change, 0) / rows.length;
+  const best = rows.reduce((a, x) => x.r.change > a.r.change ? x : a);
+  const worst = rows.reduce((a, x) => x.r.change < a.r.change ? x : a);
+
+  // Risk split: each stock's attribution shares, weighted by |today's move|
+  const attrRows = rows.filter(x => x.r.attr);
+  let riskHtml = '';
+  if (attrRows.length) {
+    let wSum = 0, m = 0, i = 0, c = 0;
+    for (const x of attrRows) {
+      const w = Math.max(0.1, Math.abs(x.r.change));
+      wSum += w; m += x.r.attr.mPct * w; i += x.r.attr.iPct * w; c += x.r.attr.cPct * w;
+    }
+    m /= wSum; i /= wSum; c /= wSum;
+    riskHtml = `
+      <div class="pf-risk">
+        <div class="pf-risk-label">Today's risk mix (move-weighted)</div>
+        <div class="mini-bar">
+          <div class="mini-seg fill-company" style="width:${c.toFixed(1)}%" title="Company-specific ${c.toFixed(0)}%"></div>
+          <div class="mini-seg fill-industry" style="width:${i.toFixed(1)}%" title="Sector ${i.toFixed(0)}%"></div>
+          <div class="mini-seg fill-market" style="width:${m.toFixed(1)}%" title="Market ${m.toFixed(0)}%"></div>
+        </div>
+        <div class="mini-legend">
+          <span><span class="mini-dot" style="background:var(--company)"></span>${c.toFixed(0)}% company</span>
+          <span><span class="mini-dot" style="background:var(--industry)"></span>${i.toFixed(0)}% sector</span>
+          <span><span class="mini-dot" style="background:var(--market)"></span>${m.toFixed(0)}% market</span>
+        </div>
+      </div>`;
+  }
+
+  // Most undervalued / most expensive by intrinsic estimate
+  const ivRows = rows
+    .map(x => ({ ...x, iv: computeIntrinsic(x.r.fund, x.r.data?.currentPrice) }))
+    .filter(x => x.iv);
+  let ivHtml = '';
+  if (ivRows.length) {
+    const cheap = ivRows.reduce((a, x) => x.iv.premPct < a.iv.premPct ? x : a);
+    const disc = -cheap.iv.premPct;
+    ivHtml = `<div class="pf-item"><span class="pf-k">Most undervalued</span><span class="pf-v">${cheap.s.ticker} <span class="${disc >= 0 ? 'pos' : 'neg'}">${Math.abs(disc).toFixed(0)}% ${disc >= 0 ? 'discount' : 'premium'}</span></span></div>`;
+  }
+
+  // Highest short interest
+  const shortRows = rows.filter(x => x.r.fund?.own?.shortPctFloat != null);
+  let shortHtml = '';
+  if (shortRows.length) {
+    const hi = shortRows.reduce((a, x) => x.r.fund.own.shortPctFloat > a.r.fund.own.shortPctFloat ? x : a);
+    shortHtml = `<div class="pf-item"><span class="pf-k">Highest short interest</span><span class="pf-v">${hi.s.ticker} <b>${(hi.r.fund.own.shortPctFloat * 100).toFixed(1)}%</b> of float</span></div>`;
+  }
+
+  return `
+    <div class="card pf-card">
+      <div class="card-heading">Portfolio Summary — ${rows.length} stocks (equal-weight)</div>
+      <div class="pf-grid">
+        <div class="pf-item"><span class="pf-k">Average move today</span><span class="pf-v ${avgMove >= 0 ? 'pos' : 'neg'}">${avgMove >= 0 ? '+' : ''}${avgMove.toFixed(2)}%</span></div>
+        <div class="pf-item"><span class="pf-k">Largest contributor</span><span class="pf-v">${best.s.ticker} <span class="pos">+${best.r.change.toFixed(2)}%</span></span></div>
+        <div class="pf-item"><span class="pf-k">Largest drag</span><span class="pf-v">${worst.s.ticker} <span class="neg">${worst.r.change.toFixed(2)}%</span></span></div>
+        ${ivHtml}${shortHtml}
+      </div>
+      ${riskHtml}
+    </div>`;
 }
 
 function renderCard(stock) {
@@ -1521,7 +1851,7 @@ function renderCard(stock) {
       <hr class="divider">
       <div class="attr-label-row">
         <span class="attr-section-title">Movement Attribution</span>
-        <span style="font-size:11px;color:var(--muted)">β<sub>M</sub>${attr.βM} &nbsp; β<sub>I</sub>${attr.βI}</span>
+        <span style="font-size:11px;color:var(--muted)">β<sub>M</sub>${attr.βM} &nbsp; β<sub>I</sub>${attr.βI} &nbsp; Conf. <b style="color:${attr.confidence >= 65 ? 'var(--up)' : attr.confidence >= 35 ? 'var(--market)' : 'var(--down)'}">${attr.confidence}%</b></span>
       </div>
 
       <div class="attr-chart-wrap">
@@ -1588,7 +1918,7 @@ function renderCard(stock) {
           <span><span class="mini-dot" style="background:var(--market)"></span>${attr.mPct.toFixed(0)}% mkt</span>
           <span><span class="mini-dot" style="background:var(--industry)"></span>${attr.iPct.toFixed(0)}% ind</span>
           <span><span class="mini-dot" style="background:var(--company)"></span>${attr.cPct.toFixed(0)}% co</span>
-          <span style="margin-left:auto">Rec. prob. ${attr.recoveryProb}%</span>
+          <span style="margin-left:auto">Conf. ${attr.confidence}% · Rec. prob. ${attr.recoveryProb}%</span>
         </div>
       </div>
     `;
@@ -1612,6 +1942,17 @@ function renderCard(stock) {
     const rangeTitle = (fund.targetLow != null && fund.targetHigh != null)
       ? `Analyst range: $${fund.targetLow.toFixed(2)} – $${fund.targetHigh.toFixed(2)}`
       : '';
+    const iv = computeIntrinsic(fund, data.currentPrice);
+    let ivHtml = '';
+    if (iv) {
+      const disc = -iv.premPct;  // positive = discount (price below estimate)
+      const ivTitle = 'Simplified estimate — average of: ' + iv.anchors.map(a => `${a.label} = $${a.value.toFixed(0)}`).join(' · ') + '. Not a professional valuation.';
+      ivHtml = `
+        <div class="sc-stat" title="${escHtml(ivTitle)}">
+          <span class="sc-stat-label">Intrinsic Est.</span>
+          <span class="sc-stat-val">$${iv.value.toFixed(0)} <span class="${disc >= 0 ? 'pos' : 'neg'}">${Math.abs(disc).toFixed(0)}% ${disc >= 0 ? 'discount' : 'premium'}</span></span>
+        </div>`;
+    }
     fundHtml = `
       <div class="sc-stats">
         <div class="sc-stat" title="Trailing 12-month price-to-earnings ratio">
@@ -1626,7 +1967,16 @@ function renderCard(stock) {
           <span class="sc-stat-label">Analysts</span>
           <span class="sc-stat-val">${fund.analysts ?? '—'}</span>
         </div>
+        ${ivHtml}
       </div>`;
+  }
+
+  // Price Movement Autopsy: expandable evidence-backed breakdown
+  let autopsyHtml = '';
+  if (attr || (fund && (fund.earnHistory?.length || fund.own))) {
+    const apOpen = autopsyOpen.has(stock.ticker);
+    autopsyHtml = `<button class="autopsy-toggle" onclick="toggleAutopsy('${stock.ticker}')">${apOpen ? '▾' : '▸'} 🔬 Today's Move Explained${attr ? ` — confidence <span style="color:${attr.confidence >= 65 ? 'var(--up)' : attr.confidence >= 35 ? 'var(--market)' : 'var(--down)'}">${attr.confidence}%</span>` : ''}</button>`;
+    if (apOpen) autopsyHtml += buildAutopsyHtml(stock, r);
   }
 
   // Company Health Rating: toggleable color-coded category scores
@@ -1673,6 +2023,7 @@ function renderCard(stock) {
       </div>
       ${fundHtml}
       ${healthHtml}
+      ${autopsyHtml}
       ${attrHtml}
     </div>
   `;
@@ -1850,6 +2201,7 @@ function renderBanner(cls, html) {
 // ═══════════════════════════════════════════════════════════
 //  INIT
 // ═══════════════════════════════════════════════════════════
+importFromHash();
 renderApp();
 renderContent();
 if (!isSignedIn()) renderAuthGate();
